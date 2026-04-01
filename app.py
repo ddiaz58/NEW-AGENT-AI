@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 app = FastAPI()
 
-print("🚀 APP.PY CARGADO CORRECTAMENTE - VERSIÓN SEGURA 3.0 🚀")
+print("🚀 APP.PY CARGADO - VERSIÓN AGENDADOR ESTRICTO 3.1 🚀")
 
 # =========================
 # VARIABLES Y CONFIG
@@ -19,9 +19,6 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 EVOLUTION_API_URL = os.getenv("EVOLUTION_API_URL", "").strip()
 EVOLUTION_API_KEY = os.getenv("EVOLUTION_API_KEY", "").strip()
 INSTANCE_NAME = os.getenv("INSTANCE_NAME", "Flowganters").strip()
-
-# Archivo local para pruebas, en Railway usaremos la Variable de Entorno
-SERVICE_ACCOUNT_FILE = 'credentials.json'
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -31,18 +28,12 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 # =========================
 def get_calendar_service():
     try:
-        # 1. Intentamos cargar desde la variable de Railway (Nube)
         creds_json = os.getenv("GOOGLE_CREDS_JSON")
-        
         if creds_json:
             info = json.loads(creds_json)
             creds = service_account.Credentials.from_service_account_info(info, scopes=SCOPES)
-            print("✅ Conectado usando Variable de Entorno")
         else:
-            # 2. Si no existe (Local), usamos el archivo credentials.json
-            creds = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
-            print("🏠 Conectado usando archivo local")
-            
+            creds = service_account.Credentials.from_service_account_file('credentials.json', scopes=SCOPES)
         return build('calendar', 'v3', credentials=creds)
     except Exception as e:
         print(f"❌ Error Google Service: {e}")
@@ -52,10 +43,8 @@ def agendar_en_google(resumen, fecha_iso):
     try:
         service = get_calendar_service()
         if not service: return False
-        
         inicio_dt = datetime.fromisoformat(fecha_iso)
         fin_dt = inicio_dt + timedelta(hours=1)
-        
         evento = {
             'summary': resumen,
             'start': {'dateTime': inicio_dt.isoformat(), 'timeZone': 'America/Santo_Domingo'},
@@ -70,10 +59,6 @@ def agendar_en_google(resumen, fecha_iso):
 # =========================
 # RUTAS (WEBHOOK)
 # =========================
-@app.get("/")
-def home():
-    return {"status": "ok", "message": "Flowganters AI está vivo y seguro"}
-
 @app.post("/webhook")
 async def receive_message(request: Request):
     try:
@@ -89,20 +74,19 @@ async def receive_message(request: Request):
 
         ai_response = get_ai_response(user_text)
 
-        # LÓGICA DE AGENDAMIENTO
         if "CONFIRMADO:" in ai_response:
             try:
+                # Extraemos: [Nombre] el [FECHA]
                 datos = ai_response.split("CONFIRMADO:")[1].strip()
                 nombre_cita, resto = datos.split(" el ")
                 fecha_cita = resto.strip()[:19] 
                 
-                if "YYYY" in fecha_cita or "MM" in fecha_cita:
-                    print("⚠️ Formato inválido detectado (ejemplo literal).")
-                else:
-                    if agendar_en_google(f"Cita: {nombre_cita}", fecha_cita):
-                        print(f"✅ Cita agendada: {nombre_cita} para {fecha_cita}")
+                if agendar_en_google(f"Cita: {nombre_cita}", fecha_cita):
+                    # Respuesta final al cliente tras agendar con éxito
+                    ai_response = f"¡Listo {nombre_cita}! Tu cita ha sido agendada para el {fecha_cita}. 🦷"
+                    print(f"✅ ÉXITO: {nombre_cita} agendado.")
             except Exception as e:
-                print(f"⚠️ Error procesando cita: {e}")
+                print(f"⚠️ Error procesando confirmación: {e}")
 
         send_to_whatsapp(remote_number, ai_response)
         return {"status": "success"}
@@ -110,8 +94,11 @@ async def receive_message(request: Request):
         print(f"❌ Error Webhook: {e}")
         return {"status": "error"}
 
+@app.get("/")
+def home(): return {"status": "online"}
+
 # =========================
-# INTELIGENCIA ARTIFICIAL
+# IA - MODO ESTRICTO
 # =========================
 def get_ai_response(user_input):
     try:
@@ -121,17 +108,21 @@ def get_ai_response(user_input):
             messages=[
                 {
                     "role": "system", 
-                    "content": f"""Eres el asistente de la clínica dental Flowganters. Hoy es {hoy}.
-                    Cuando agendes, confirma usando EXACTAMENTE este formato:
-                    'CONFIRMADO: [Nombre] el [FECHA EN FORMATO ISO]'
-                    Ejemplo: CONFIRMADO: Juan el 2026-04-01T15:00:00"""
+                    "content": f"""Eres un robot de agendamiento para la clínica Flowganters. Hoy es {hoy}.
+                    
+                    REGLA: Si el usuario te da su NOMBRE y una FECHA/HORA, tu ÚNICA respuesta debe ser el formato de confirmación.
+                    
+                    FORMATO: CONFIRMADO: [Nombre] el [FECHA ISO]
+                    EJEMPLO: CONFIRMADO: Pedro el 2026-04-01T15:00:00
+                    
+                    Si falta el nombre o la hora, pídela de forma muy breve (máximo 10 palabras)."""
                 },
                 {"role": "user", "content": user_input}
-            ]
+            ],
+            temperature=0 # <--- Cero creatividad, máxima precisión
         )
         return response.choices[0].message.content
-    except Exception as e:
-        print(f"❌ Error OpenAI: {e}")
+    except:
         return "Lo siento, ¿podrías repetirme la fecha y hora?"
 
 # =========================
