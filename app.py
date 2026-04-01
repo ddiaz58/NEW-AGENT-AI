@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 app = FastAPI()
 
-print("🚀 APP.PY CARGADO - VERSIÓN AGENDADOR ESTRICTO 3.1 🚀")
+print("🚀 APP.PY CARGADO - VERSIÓN AGENDADOR CON GUÍA 3.3 🚀")
 
 # =========================
 # VARIABLES Y CONFIG
@@ -74,17 +74,19 @@ async def receive_message(request: Request):
 
         ai_response = get_ai_response(user_text)
 
+        # Si la IA confirma, disparamos el calendario
         if "CONFIRMADO:" in ai_response:
             try:
-                # Extraemos: [Nombre] el [FECHA]
                 datos = ai_response.split("CONFIRMADO:")[1].strip()
                 nombre_cita, resto = datos.split(" el ")
                 fecha_cita = resto.strip()[:19] 
                 
                 if agendar_en_google(f"Cita: {nombre_cita}", fecha_cita):
-                    # Respuesta final al cliente tras agendar con éxito
-                    ai_response = f"¡Listo {nombre_cita}! Tu cita ha sido agendada para el {fecha_cita}. 🦷"
-                    print(f"✅ ÉXITO: {nombre_cita} agendado.")
+                    # Formateamos la fecha para que se vea bonita en WhatsApp
+                    dt_obj = datetime.fromisoformat(fecha_cita)
+                    fecha_legible = dt_obj.strftime("%d/%m/%Y a las %I:%M %p")
+                    ai_response = f"✅ ¡Perfecto {nombre_cita}! Tu cita ha sido agendada para el {fecha_legible}. ¡Te esperamos en Flowganters! 🦷"
+                    print(f"📅 Cita agendada con éxito.")
             except Exception as e:
                 print(f"⚠️ Error procesando confirmación: {e}")
 
@@ -98,7 +100,7 @@ async def receive_message(request: Request):
 def home(): return {"status": "online"}
 
 # =========================
-# IA - MODO ESTRICTO
+# IA - MODO ASISTENTE CON GUÍA
 # =========================
 def get_ai_response(user_input):
     try:
@@ -108,22 +110,30 @@ def get_ai_response(user_input):
             messages=[
                 {
                     "role": "system", 
-                    "content": f"""Eres un robot de agendamiento para la clínica Flowganters. Hoy es {hoy}.
+                    "content": f"""Eres el asistente de la clínica Flowganters. Hoy es {hoy}.
                     
-                    REGLA: Si el usuario te da su NOMBRE y una FECHA/HORA, tu ÚNICA respuesta debe ser el formato de confirmación.
+                    OBJETIVO: Agendar citas de forma clara.
                     
-                    FORMATO: CONFIRMADO: [Nombre] el [FECHA ISO]
-                    EJEMPLO: CONFIRMADO: Pedro el 2026-04-01T15:00:00
+                    REGLA 1 (DATOS INCOMPLETOS): Si faltan el nombre, la fecha o la hora, responde EXACTAMENTE así:
+                    '¡Hola! Para agendar tu cita, por favor provee los siguientes datos en este orden:
+                    1. Nombre completo.
+                    2. Fecha.
+                    3. Hora (ejemplo: 2:00 PM).
                     
-                    Si falta el nombre o la hora, pídela de forma muy breve (máximo 10 palabras)."""
+                    Ejemplo: Juan Pérez, mañana a las 3 PM.'
+                    
+                    REGLA 2 (DATOS COMPLETOS): Si ya tienes NOMBRE, FECHA y HORA, responde ÚNICAMENTE con:
+                    CONFIRMADO: [Nombre] el [FECHA ISO]
+                    
+                    Nota: No pidas teléfono ni des explicaciones largas."""
                 },
                 {"role": "user", "content": user_input}
             ],
-            temperature=0 # <--- Cero creatividad, máxima precisión
+            temperature=0
         )
         return response.choices[0].message.content
     except:
-        return "Lo siento, ¿podrías repetirme la fecha y hora?"
+        return "Lo siento, ¿podrías enviarme tu nombre, fecha y hora para la cita?"
 
 # =========================
 # ENVÍO WHATSAPP
