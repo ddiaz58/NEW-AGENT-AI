@@ -7,12 +7,9 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from datetime import datetime, timedelta
 
-# =========================================================
-# 1. ESTA LÍNEA DEBE IR ANTES DE CUALQUIER @app.post
-# =========================================================
 app = FastAPI()
 
-print("🚀 APP.PY CARGADO CORRECTAMENTE - VERSIÓN AGENDADOR 🚀")
+print("🚀 APP.PY CARGADO CORRECTAMENTE - VERSIÓN AGENDADOR 2.0 🚀")
 
 # =========================
 # VARIABLES Y CONFIG
@@ -78,14 +75,19 @@ async def receive_message(request: Request):
 
         ai_response = get_ai_response(user_text)
 
+        # LÓGICA DE AGENDAMIENTO
         if "CONFIRMADO:" in ai_response:
             try:
                 datos = ai_response.split("CONFIRMADO:")[1].strip()
                 nombre_cita, resto = datos.split(" el ")
-                fecha_cita = resto.strip()[:19] # Limpieza de fecha
+                fecha_cita = resto.strip()[:19] # Cortamos para evitar puntos o emojis
                 
-                if agendar_en_google(f"Cita: {nombre_cita}", fecha_cita):
-                    ai_response = f"¡Perfecto {nombre_cita}! 🦷 Tu cita ha sido agendada para el {fecha_cita}."
+                # VALIDACIÓN: Evitar que agende el texto de ejemplo literal
+                if "YYYY" in fecha_cita or "MM" in fecha_cita:
+                    print("⚠️ La IA envió un formato de ejemplo. No se agenda.")
+                else:
+                    if agendar_en_google(f"Cita: {nombre_cita}", fecha_cita):
+                        print(f"✅ Cita guardada: {nombre_cita} para {fecha_cita}")
             except Exception as e:
                 print(f"⚠️ Error procesando cita: {e}")
 
@@ -100,16 +102,29 @@ async def receive_message(request: Request):
 # =========================
 def get_ai_response(user_input):
     try:
+        # Le decimos qué día es hoy para que sepa calcular fechas relativas
+        hoy = datetime.now().strftime("%Y-%m-%d %H:%M")
+        
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "Eres el asistente de Flowganters. Para agendar usa: 'CONFIRMADO: [Nombre] el YYYY-MM-DDTHH:MM:SS'. Ejemplo: CONFIRMADO: Juan el 2026-04-01T15:00:00"},
+                {
+                    "role": "system", 
+                    "content": f"""Eres el asistente de la clínica dental Flowganters. Hoy es {hoy}.
+                    Tu meta es agendar citas. Cuando el usuario diga una fecha y hora, confirma usando ESTE FORMATO:
+                    'CONFIRMADO: [Nombre] el [FECHA EN FORMATO ISO]'
+                    
+                    Ejemplo real: CONFIRMADO: Juan el 2026-04-01T15:00:00
+                    
+                    Nunca respondas con 'YYYY-MM-DD', usa siempre números reales."""
+                },
                 {"role": "user", "content": user_input}
             ]
         )
         return response.choices[0].message.content
-    except:
-        return "Lo siento, ¿podrías repetirlo?"
+    except Exception as e:
+        print(f"❌ Error OpenAI: {e}")
+        return "Lo siento, ¿podrías repetirme la fecha y hora?"
 
 # =========================
 # ENVÍO WHATSAPP
