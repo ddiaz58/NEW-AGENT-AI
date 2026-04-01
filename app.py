@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 app = FastAPI()
 
-print("🚀 APP.PY CARGADO - VERSIÓN AGENDADOR CON GUÍA 3.3 🚀")
+print("🚀 APP.PY CARGADO - VERSIÓN AGENDADOR CON RECAP 3.5 🚀")
 
 # =========================
 # VARIABLES Y CONFIG
@@ -39,14 +39,17 @@ def get_calendar_service():
         print(f"❌ Error Google Service: {e}")
         return None
 
-def agendar_en_google(resumen, fecha_iso):
+def agendar_en_google(resumen, fecha_iso, telefono_cliente):
     try:
         service = get_calendar_service()
         if not service: return False
+        
         inicio_dt = datetime.fromisoformat(fecha_iso)
         fin_dt = inicio_dt + timedelta(hours=1)
+        
         evento = {
             'summary': resumen,
+            'description': f"Cita agendada vía WhatsApp\nTeléfono: {telefono_cliente}",
             'start': {'dateTime': inicio_dt.isoformat(), 'timeZone': 'America/Santo_Domingo'},
             'end': {'dateTime': fin_dt.isoformat(), 'timeZone': 'America/Santo_Domingo'},
         }
@@ -68,25 +71,38 @@ async def receive_message(request: Request):
 
         message_obj = msg_data.get("message", {})
         user_text = message_obj.get("conversation") or message_obj.get("extendedTextMessage", {}).get("text")
+        
+        # Extraemos el número de teléfono del remitente
         remote_number = msg_data.get("key", {}).get("remoteJid", "").split("@")[0]
 
         if not user_text: return {"status": "no_text"}
 
         ai_response = get_ai_response(user_text)
 
-        # Si la IA confirma, disparamos el calendario
+        # Si la IA genera el comando técnico, agendamos
         if "CONFIRMADO:" in ai_response:
             try:
                 datos = ai_response.split("CONFIRMADO:")[1].strip()
                 nombre_cita, resto = datos.split(" el ")
                 fecha_cita = resto.strip()[:19] 
                 
-                if agendar_en_google(f"Cita: {nombre_cita}", fecha_cita):
-                    # Formateamos la fecha para que se vea bonita en WhatsApp
+                # Pasamos el remote_number para guardarlo en el calendario
+                if agendar_en_google(f"Cita: {nombre_cita}", fecha_cita, remote_number):
                     dt_obj = datetime.fromisoformat(fecha_cita)
-                    fecha_legible = dt_obj.strftime("%d/%m/%Y a las %I:%M %p")
-                    ai_response = f"✅ ¡Perfecto {nombre_cita}! Tu cita ha sido agendada para el {fecha_legible}. ¡Te esperamos en Flowganters! 🦷"
-                    print(f"📅 Cita agendada con éxito.")
+                    fecha_legible = dt_obj.strftime("%d/%m/%Y")
+                    hora_legible = dt_obj.strftime("%I:%M %p")
+                    
+                    # RECAP EN EL CHAT
+                    ai_response = (
+                        f"✅ *¡CITA AGENDADA CON ÉXITO!*\n\n"
+                        f"Aquí tienes el resumen de tu cita:\n"
+                        f"👤 *Paciente:* {nombre_cita}\n"
+                        f"📅 *Fecha:* {fecha_legible}\n"
+                        f"⏰ *Hora:* {hora_legible}\n"
+                        f"📱 *Teléfono:* {remote_number}\n\n"
+                        f"¡Te esperamos en Flowganters! 🦷"
+                    )
+                    print(f"📅 Recap enviado a {nombre_cita}")
             except Exception as e:
                 print(f"⚠️ Error procesando confirmación: {e}")
 
@@ -100,7 +116,7 @@ async def receive_message(request: Request):
 def home(): return {"status": "online"}
 
 # =========================
-# IA - MODO ASISTENTE CON GUÍA
+# IA - MODO ASISTENTE
 # =========================
 def get_ai_response(user_input):
     try:
@@ -110,30 +126,23 @@ def get_ai_response(user_input):
             messages=[
                 {
                     "role": "system", 
-                    "content": f"""Eres el asistente de la clínica Flowganters. Hoy es {hoy}.
+                    "content": f"""Eres el asistente virtual de la clínica dental Flowganters. Hoy es {hoy}.
                     
-                    OBJETIVO: Agendar citas de forma clara.
+                    INSTRUCCIONES:
+                    1. Saluda amablemente si el usuario saluda.
+                    2. Si faltan datos (Nombre o Fecha/Hora), pide: 'Nombre completo, Fecha y Hora'.
+                    3. Si ya tienes Nombre y Fecha/Hora, responde SOLO con el formato técnico de abajo.
                     
-                    REGLA 1 (DATOS INCOMPLETOS): Si faltan el nombre, la fecha o la hora, responde EXACTAMENTE así:
-                    '¡Hola! Para agendar tu cita, por favor provee los siguientes datos en este orden:
-                    1. Nombre completo.
-                    2. Fecha.
-                    3. Hora (ejemplo: 2:00 PM).
-                    
-                    Ejemplo: Juan Pérez, mañana a las 3 PM.'
-                    
-                    REGLA 2 (DATOS COMPLETOS): Si ya tienes NOMBRE, FECHA y HORA, responde ÚNICAMENTE con:
-                    CONFIRMADO: [Nombre] el [FECHA ISO]
-                    
-                    Nota: No pidas teléfono ni des explicaciones largas."""
+                    FORMATO TÉCNICO:
+                    CONFIRMADO: [Nombre] el [FECHA ISO]"""
                 },
                 {"role": "user", "content": user_input}
             ],
-            temperature=0
+            temperature=0.3
         )
         return response.choices[0].message.content
     except:
-        return "Lo siento, ¿podrías enviarme tu nombre, fecha y hora para la cita?"
+        return "Lo siento, ¿podrías enviarme tu nombre, fecha y hora para agendar?"
 
 # =========================
 # ENVÍO WHATSAPP
