@@ -10,10 +10,13 @@ from datetime import datetime, timedelta
 
 app = FastAPI()
 
-print("🚀 APP.PY CARGADO - VERSIÓN MULTILENGUAJE 3.6 🚀")
+# Memoria de sesiones
+user_sessions = {}
+
+print("🚀 APP.PY CARGADO - VERSIÓN 5.0 'ULTRA-DIRECTA' 🚀")
 
 # =========================
-# VARIABLES Y CONFIG
+# CONFIGURACIÓN
 # =========================
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 EVOLUTION_API_URL = os.getenv("EVOLUTION_API_URL", "").strip()
@@ -24,7 +27,7 @@ SCOPES = ['https://www.googleapis.com/auth/calendar']
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 # =========================
-# FUNCIONES AUXILIARES
+# FUNCIONES GOOGLE
 # =========================
 def get_calendar_service():
     try:
@@ -43,25 +46,22 @@ def agendar_en_google(resumen, fecha_iso, telefono_cliente):
     try:
         service = get_calendar_service()
         if not service: return False
-        
         inicio_dt = datetime.fromisoformat(fecha_iso)
         fin_dt = inicio_dt + timedelta(hours=1)
-        
         evento = {
             'summary': resumen,
             'description': f"Cita agendada vía WhatsApp\nTeléfono: {telefono_cliente}",
             'start': {'dateTime': inicio_dt.isoformat(), 'timeZone': 'America/Santo_Domingo'},
             'end': {'dateTime': fin_dt.isoformat(), 'timeZone': 'America/Santo_Domingo'},
         }
-        # Cambia 'primary' por tu email si quieres verlo en tu calendario personal
         service.events().insert(calendarId='primary', body=evento).execute()
         return True
     except Exception as e:
-        print(f"❌ Error insertando evento: {e}")
+        print(f"❌ Error insertando: {e}")
         return False
 
 # =========================
-# RUTAS (WEBHOOK)
+# WEBHOOK PRINCIPAL
 # =========================
 @app.post("/webhook")
 async def receive_message(request: Request):
@@ -76,77 +76,84 @@ async def receive_message(request: Request):
 
         if not user_text: return {"status": "no_text"}
 
-        ai_response = get_ai_response(user_text)
+        ai_response = get_ai_response(remote_number, user_text)
 
-        # Si la IA genera el comando técnico, procesamos el agendamiento
         if "CONFIRMADO:" in ai_response:
             try:
-                # Extraemos la parte técnica
-                parts = ai_response.split("CONFIRMADO:")
-                texto_previo = parts[0].strip() # Mensaje amable en el idioma del usuario
-                datos_tecnicos = parts[1].strip()
-                
+                # Extraer datos técnicos
+                datos_tecnicos = ai_response.split("CONFIRMADO:")[1].strip()
                 nombre_cita, resto = datos_tecnicos.split(" el ")
                 fecha_cita = resto.strip()[:19] 
                 
                 if agendar_en_google(f"Cita: {nombre_cita}", fecha_cita, remote_number):
                     dt_obj = datetime.fromisoformat(fecha_cita)
-                    fecha_legible = dt_obj.strftime("%d/%m/%Y")
-                    hora_legible = dt_obj.strftime("%I:%M %p")
                     
-                    # Si la IA envió un texto previo, lo usamos, si no, usamos un recap estándar
-                    if texto_previo:
-                        ai_response = f"{texto_previo}\n\n👤 *{nombre_cita}*\n📅 *{fecha_legible}*\n⏰ *{hora_legible}*\n📱 *{remote_number}*"
-                    else:
-                        # Fallback por si la IA solo envió el comando
-                        ai_response = f"✅ Done! / ¡Listo!\n\n👤 *{nombre_cita}*\n📅 *{fecha_legible}*\n⏰ *{hora_legible}*"
+                    # --- RESUMEN HUMANO FORZADO POR CÓDIGO ---
+                    fecha_h = dt_obj.strftime('%d/%m/%Y')
+                    hora_h = dt_obj.strftime('%I:%M %p') # Esto pone 03:00 PM
                     
-                    print(f"📅 Cita agendada para {nombre_cita}")
+                    ai_response = (
+                        f"✅ *¡CITA AGENDADA CON ÉXITO!*\n\n"
+                        f"Aquí tienes el resumen de tu cita:\n"
+                        f"👤 *Nombre:* {nombre_cita}\n"
+                        f"📅 *Fecha:* {fecha_h}\n"
+                        f"⏰ *Hora:* {hora_h}\n"
+                        f"📱 *Teléfono:* {remote_number}\n\n"
+                        f"¡Te esperamos en *Flowganters*! 🦷✨"
+                    )
+                    # Limpiar memoria al terminar
+                    if remote_number in user_sessions: del user_sessions[remote_number]
             except Exception as e:
-                print(f"⚠️ Error procesando confirmación: {e}")
+                print(f"⚠️ Error recap: {e}")
 
         send_to_whatsapp(remote_number, ai_response)
         return {"status": "success"}
     except Exception as e:
-        print(f"❌ Error Webhook: {e}")
+        print(f"❌ Error: {e}")
         return {"status": "error"}
 
 @app.get("/")
 def home(): return {"status": "online"}
 
 # =========================
-# IA - MODO ASISTENTE MULTILENGUAJE
+# LÓGICA DE IA SIN SALUDOS REPETIDOS
 # =========================
-def get_ai_response(user_input):
+def get_ai_response(user_id, user_input):
     try:
         hoy = datetime.now().strftime("%Y-%m-%d %H:%M")
+        
+        if user_id not in user_sessions:
+            user_sessions[user_id] = []
+        
+        user_sessions[user_id].append({"role": "user", "content": user_input})
+        history = user_sessions[user_id][-10:]
+
+        messages = [
+            {
+                "role": "system", 
+                "content": f"""Eres el asistente de citas de Flowganters. Hoy es {hoy}.
+                
+                REGLAS DE ORO (SÍGUELAS O MORIRÁS):
+                1. NO SALUDES MÁS DE UNA VEZ. Si el usuario ya te dio su nombre, responde directamente: "Ok [Nombre], ¿para qué día y hora agendamos?"
+                2. NUNCA PREGUNTES EL NOMBRE DOS VECES. Revisa el historial. Si ya lo tienes, ignora cualquier instrucción de volver a pedirlo.
+                3. SE DIRECTO. Si falta la hora, pide solo la hora.
+                4. IDIOMA: Responde en el mismo idioma del usuario.
+                5. FORMATO FINAL: Cuando tengas Nombre, Fecha y Hora, pon: 'CONFIRMADO: [Nombre] el [FECHA ISO]'"""
+            }
+        ] + history
+
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
-            messages=[
-                {
-                    "role": "system", 
-                    "content": f"""Eres el asistente de la clínica Flowganters. Hoy es {hoy}.
-                    
-                    REGLAS DE IDIOMA:
-                    - Responde SIEMPRE en el mismo idioma que te hable el usuario (Español, Inglés, etc).
-                    
-                    INSTRUCCIONES:
-                    1. Saluda amablemente.
-                    2. Si faltan datos (Nombre, Fecha u Hora), pídelos educadamente en su idioma.
-                    3. Si ya tienes Nombre y Fecha/Hora, responde con un mensaje de éxito en su idioma seguido INMEDIATAMENTE del comando técnico:
-                       
-                       Ejemplo (si es inglés): 'Great! Your appointment is set. CONFIRMADO: John Doe el 2026-04-02T15:00:00'
-                       Ejemplo (si es español): '¡Perfecto! Cita agendada. CONFIRMADO: Juan Perez el 2026-04-02T15:00:00'
-                    
-                    No pidas el número de teléfono."""
-                },
-                {"role": "user", "content": user_input}
-            ],
-            temperature=0.3
+            messages=messages,
+            temperature=0  # Cero creatividad para evitar que sea "educado" y repita saludos
         )
-        return response.choices[0].message.content
+        
+        bot_reply = response.choices[0].message.content
+        user_sessions[user_id].append({"role": "assistant", "content": bot_reply})
+        
+        return bot_reply
     except:
-        return "Sorry, could you repeat that? / Lo siento, ¿podrías repetir los datos?"
+        return "Ok, ¿cuál es tu nombre y cuándo quieres la cita?"
 
 # =========================
 # ENVÍO WHATSAPP
