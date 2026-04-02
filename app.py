@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 app = FastAPI()
 
-print("🚀 APP.PY CARGADO - VERSIÓN AGENDADOR CON RECAP 3.5 🚀")
+print("🚀 APP.PY CARGADO - VERSIÓN MULTILENGUAJE 3.6 🚀")
 
 # =========================
 # VARIABLES Y CONFIG
@@ -53,6 +53,7 @@ def agendar_en_google(resumen, fecha_iso, telefono_cliente):
             'start': {'dateTime': inicio_dt.isoformat(), 'timeZone': 'America/Santo_Domingo'},
             'end': {'dateTime': fin_dt.isoformat(), 'timeZone': 'America/Santo_Domingo'},
         }
+        # Cambia 'primary' por tu email si quieres verlo en tu calendario personal
         service.events().insert(calendarId='primary', body=evento).execute()
         return True
     except Exception as e:
@@ -71,38 +72,36 @@ async def receive_message(request: Request):
 
         message_obj = msg_data.get("message", {})
         user_text = message_obj.get("conversation") or message_obj.get("extendedTextMessage", {}).get("text")
-        
-        # Extraemos el número de teléfono del remitente
         remote_number = msg_data.get("key", {}).get("remoteJid", "").split("@")[0]
 
         if not user_text: return {"status": "no_text"}
 
         ai_response = get_ai_response(user_text)
 
-        # Si la IA genera el comando técnico, agendamos
+        # Si la IA genera el comando técnico, procesamos el agendamiento
         if "CONFIRMADO:" in ai_response:
             try:
-                datos = ai_response.split("CONFIRMADO:")[1].strip()
-                nombre_cita, resto = datos.split(" el ")
+                # Extraemos la parte técnica
+                parts = ai_response.split("CONFIRMADO:")
+                texto_previo = parts[0].strip() # Mensaje amable en el idioma del usuario
+                datos_tecnicos = parts[1].strip()
+                
+                nombre_cita, resto = datos_tecnicos.split(" el ")
                 fecha_cita = resto.strip()[:19] 
                 
-                # Pasamos el remote_number para guardarlo en el calendario
                 if agendar_en_google(f"Cita: {nombre_cita}", fecha_cita, remote_number):
                     dt_obj = datetime.fromisoformat(fecha_cita)
                     fecha_legible = dt_obj.strftime("%d/%m/%Y")
                     hora_legible = dt_obj.strftime("%I:%M %p")
                     
-                    # RECAP EN EL CHAT
-                    ai_response = (
-                        f"✅ *¡CITA AGENDADA CON ÉXITO!*\n\n"
-                        f"Aquí tienes el resumen de tu cita:\n"
-                        f"👤 *Paciente:* {nombre_cita}\n"
-                        f"📅 *Fecha:* {fecha_legible}\n"
-                        f"⏰ *Hora:* {hora_legible}\n"
-                        f"📱 *Teléfono:* {remote_number}\n\n"
-                        f"¡Te esperamos en Flowganters! 🦷"
-                    )
-                    print(f"📅 Recap enviado a {nombre_cita}")
+                    # Si la IA envió un texto previo, lo usamos, si no, usamos un recap estándar
+                    if texto_previo:
+                        ai_response = f"{texto_previo}\n\n👤 *{nombre_cita}*\n📅 *{fecha_legible}*\n⏰ *{hora_legible}*\n📱 *{remote_number}*"
+                    else:
+                        # Fallback por si la IA solo envió el comando
+                        ai_response = f"✅ Done! / ¡Listo!\n\n👤 *{nombre_cita}*\n📅 *{fecha_legible}*\n⏰ *{hora_legible}*"
+                    
+                    print(f"📅 Cita agendada para {nombre_cita}")
             except Exception as e:
                 print(f"⚠️ Error procesando confirmación: {e}")
 
@@ -116,7 +115,7 @@ async def receive_message(request: Request):
 def home(): return {"status": "online"}
 
 # =========================
-# IA - MODO ASISTENTE
+# IA - MODO ASISTENTE MULTILENGUAJE
 # =========================
 def get_ai_response(user_input):
     try:
@@ -126,15 +125,20 @@ def get_ai_response(user_input):
             messages=[
                 {
                     "role": "system", 
-                    "content": f"""Eres el asistente virtual de la clínica dental Flowganters. Hoy es {hoy}.
+                    "content": f"""Eres el asistente de la clínica Flowganters. Hoy es {hoy}.
+                    
+                    REGLAS DE IDIOMA:
+                    - Responde SIEMPRE en el mismo idioma que te hable el usuario (Español, Inglés, etc).
                     
                     INSTRUCCIONES:
-                    1. Saluda amablemente si el usuario saluda.
-                    2. Si faltan datos (Nombre o Fecha/Hora), pide: 'Nombre completo, Fecha y Hora'.
-                    3. Si ya tienes Nombre y Fecha/Hora, responde SOLO con el formato técnico de abajo.
+                    1. Saluda amablemente.
+                    2. Si faltan datos (Nombre, Fecha u Hora), pídelos educadamente en su idioma.
+                    3. Si ya tienes Nombre y Fecha/Hora, responde con un mensaje de éxito en su idioma seguido INMEDIATAMENTE del comando técnico:
+                       
+                       Ejemplo (si es inglés): 'Great! Your appointment is set. CONFIRMADO: John Doe el 2026-04-02T15:00:00'
+                       Ejemplo (si es español): '¡Perfecto! Cita agendada. CONFIRMADO: Juan Perez el 2026-04-02T15:00:00'
                     
-                    FORMATO TÉCNICO:
-                    CONFIRMADO: [Nombre] el [FECHA ISO]"""
+                    No pidas el número de teléfono."""
                 },
                 {"role": "user", "content": user_input}
             ],
@@ -142,7 +146,7 @@ def get_ai_response(user_input):
         )
         return response.choices[0].message.content
     except:
-        return "Lo siento, ¿podrías enviarme tu nombre, fecha y hora para agendar?"
+        return "Sorry, could you repeat that? / Lo siento, ¿podrías repetir los datos?"
 
 # =========================
 # ENVÍO WHATSAPP
